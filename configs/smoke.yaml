@@ -1,0 +1,124 @@
+experiment:
+  name: smoke
+  root_seed: 1
+
+data:
+  d_total: 120
+  d_signal_max: 10
+  distractors:
+    n_iid_noise: 60
+    n_correlated_noise: 40
+    n_duplicates: 10
+    duplicate_log_noise_sigma: 0.02
+  correlation:
+    block_size: 5
+    n_blocked_features: 50
+  marginals:
+    kind: lognormal
+
+tasks:
+  - id: l6_nonmonotone_ratio
+    level: 6
+    kind: nonmonotone
+    base: l1_ratio
+    shape: u_shaped
+  - id: l4_ratio_x_ratio
+    level: 4
+    kind: ratio_x_ratio
+
+label:
+  target_prevalence: 0.05
+  sigma_eps: 0.5
+  a: 2.0
+  component_weight: 1.0
+  epsilon_rel: 1.0e-3
+  nonmonotone:
+    mu: 0.0
+    delta: 1.0
+  gating:
+    threshold_quantile: 0.7
+
+regimes:
+  - id: ln_sigma0.7_rho0.5
+    family: tail_corr
+    sigma: 0.7
+    rho: 0.5
+  - id: shift_preserve_c5
+    family: shift_preserve
+    sigma: 0.7
+    rho: 0.5
+    shift:
+      type: preserve
+      c: 5.0
+
+n_values: [10000]
+seeds: [0, 1]
+
+splits:
+  train: 0.6
+  val: 0.2
+  test: 0.2
+
+oracle_modes: [raw_only, oracle_s_only, oracle_coords_only]
+
+runner:
+  n_jobs: 2
+
+xgb_configs:
+  - id: depth3_fast
+    params:
+      n_estimators: 320
+      learning_rate: 0.08
+      max_depth: 3
+      subsample: 0.9
+      colsample_bytree: 0.9
+      reg_lambda: 1.0
+      min_child_weight: 1.0
+      gamma: 0.0
+      tree_method: hist
+      n_jobs: 1
+      eval_metric: aucpr
+      early_stopping_rounds: 20
+  - id: depth4_balanced
+    params:
+      n_estimators: 450
+      learning_rate: 0.065
+      max_depth: 4
+      subsample: 0.85
+      colsample_bytree: 0.9
+      reg_lambda: 1.2
+      min_child_weight: 1.0
+      gamma: 0.0
+      tree_method: hist
+      n_jobs: 1
+      eval_metric: aucpr
+      early_stopping_rounds: 25
+  - id: depth5_high_cap
+    params:
+      n_estimators: 650
+      learning_rate: 0.05
+      max_depth: 5
+      subsample: 0.85
+      colsample_bytree: 0.85
+      reg_lambda: 1.0
+      min_child_weight: 2.0
+      gamma: 0.0
+      tree_method: hist
+      n_jobs: 1
+      eval_metric: aucpr
+      early_stopping_rounds: 30
+
+diagnostics:
+  invariance:
+    n_diag: 500
+    m_c: 5
+    c_loguniform_low: 0.5
+    c_loguniform_high: 2.0
+  iso_variance:
+    n_base: 150
+    m: 10
+
+output:
+  base_dir: runs/smoke
+  formats: [parquet, csv]
+  overwrite: true

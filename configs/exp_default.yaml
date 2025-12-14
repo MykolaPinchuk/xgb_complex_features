@@ -1,0 +1,175 @@
+experiment:
+  name: exp_default
+  root_seed: 123
+
+data:
+  d_total: 120
+  d_signal_max: 10
+  distractors:
+    n_iid_noise: 60
+    n_correlated_noise: 40
+    n_duplicates: 10
+    duplicate_log_noise_sigma: 0.02
+  correlation:
+    block_size: 5
+    n_blocked_features: 50
+  marginals:
+    kind: lognormal
+
+tasks:
+  - id: l1_ratio
+    level: 1
+    kind: ratio
+  - id: l1_product
+    level: 1
+    kind: product
+  - id: l2_ratio_of_sums
+    level: 2
+    kind: ratio_of_sums
+  - id: l2_product_of_sums
+    level: 2
+    kind: product_of_sums
+  - id: l3_ratio_diff
+    level: 3
+    kind: ratio_diff
+  - id: l3_product_diff
+    level: 3
+    kind: product_diff
+  - id: l4_ratio_x_ratio
+    level: 4
+    kind: ratio_x_ratio
+  - id: l4_product_x_product
+    level: 4
+    kind: product_x_product
+  - id: l5_ratio_x_product
+    level: 5
+    kind: ratio_x_product
+  - id: l6_nonmonotone_ratio
+    level: 6
+    kind: nonmonotone
+    base: l1_ratio
+    shape: u_shaped
+  - id: l6_nonmonotone_product
+    level: 6
+    kind: nonmonotone
+    base: l1_product
+    shape: band_pass
+  - id: l7_gated_ratio_vs_product
+    level: 7
+    kind: gated
+    ratio_task: l1_ratio
+    product_task: l1_product
+
+label:
+  target_prevalence: 0.05
+  sigma_eps: 0.5
+  a: 2.0
+  component_weight: 1.0
+  epsilon_rel: 1.0e-3
+  nonmonotone:
+    mu: 0.0
+    delta: 1.0
+  gating:
+    threshold_quantile: 0.7
+
+regimes:
+  - id: ln_sigma0.3_rho0.0
+    family: tail_corr
+    sigma: 0.3
+    rho: 0.0
+  - id: ln_sigma0.7_rho0.5
+    family: tail_corr
+    sigma: 0.7
+    rho: 0.5
+  - id: ln_sigma1.2_rho0.9
+    family: tail_corr
+    sigma: 1.2
+    rho: 0.9
+  - id: mixture_extremes_rho0.5
+    family: mixture_extremes
+    rho: 0.5
+    mixture:
+      p_low: 0.9
+      sigma_low: 0.3
+      sigma_high: 1.2
+  - id: shift_preserve_c5
+    family: shift_preserve
+    sigma: 0.7
+    rho: 0.5
+    shift:
+      type: preserve
+      c: 5.0
+  - id: shift_naive_c5
+    family: shift_naive
+    sigma: 0.7
+    rho: 0.5
+    shift:
+      type: naive
+      c: 5.0
+      subset_fraction: 0.2
+
+n_values: [30000]
+seeds: [0, 1, 2]
+
+splits:
+  train: 0.6
+  val: 0.2
+  test: 0.2
+
+oracle_modes: [raw_only, oracle_s_only, oracle_coords_only]
+
+xgb_configs:
+  - id: depth4_light
+    params:
+      n_estimators: 2200
+      learning_rate: 0.04
+      max_depth: 4
+      subsample: 0.9
+      colsample_bytree: 0.85
+      reg_lambda: 1.5
+      min_child_weight: 5.0
+      gamma: 0.0
+      tree_method: hist
+      eval_metric: aucpr
+      early_stopping_rounds: 50
+  - id: baseline
+    params:
+      n_estimators: 3000
+      learning_rate: 0.03
+      max_depth: 5
+      subsample: 0.8
+      colsample_bytree: 0.8
+      reg_lambda: 1.0
+      min_child_weight: 1.0
+      gamma: 0.0
+      tree_method: hist
+      eval_metric: aucpr
+      early_stopping_rounds: 50
+  - id: depth7_high_capacity
+    params:
+      n_estimators: 3500
+      learning_rate: 0.025
+      max_depth: 7
+      subsample: 0.8
+      colsample_bytree: 0.75
+      reg_lambda: 0.8
+      min_child_weight: 1.0
+      gamma: 0.1
+      tree_method: hist
+      eval_metric: aucpr
+      early_stopping_rounds: 70
+
+diagnostics:
+  invariance:
+    n_diag: 2000
+    m_c: 5
+    c_loguniform_low: 0.5
+    c_loguniform_high: 2.0
+  iso_variance:
+    n_base: 500
+    m: 10
+
+output:
+  base_dir: runs/exp_default
+  formats: [parquet, csv]
+  overwrite: false

@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "xgb_complex_features"
+version = "0.1.0"
+description = "Benchmark XGBoost ability to learn ratio/product structure from raw variables"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "joblib==1.4.2",
+  "matplotlib==3.8.4",
+  "numpy==1.26.4",
+  "pandas==2.2.2",
+  "pyarrow==15.0.2",
+  "pyyaml==6.0.1",
+  "scikit-learn==1.4.2",
+  "xgboost==2.0.3",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
