@@ -7,7 +7,7 @@ To change repo-specific notes, edit local_context_enrichments/local_agents.md in
 # Global Instructions (Baseline)
 
 - Do not go outside this repo. Do not delete or edit any files outside this workspace!!!
-- Even if you have mistakely or unintentionally created a file or a folder outside this repo, do not edit or delete it w/o asking permission. In such cases stop your work and ask human for a permission to delete them.
+- Even if you have mistakenly or unintentionally created a file or a folder outside this repo, do not edit or delete it w/o asking permission. In such cases stop your work and ask human for a permission to delete them.
 - Use rapid iteration. Start with a simple version that works, then add features incrementally. When dealing with large tasks, proceed in small increments and validate key assumptions/results for each increment before proceeding further. Validate assumptions quickly. Then add complexity incrementally.
 - Do not run any code which is expected to take more than 5 minutes to run. Use timeouts. Use 2 minutes as default timeout for any code execution.
 - Run code to verify behavior. Do not rely on assumptions or placeholders.
@@ -20,7 +20,7 @@ To change repo-specific notes, edit local_context_enrichments/local_agents.md in
 - When discussing with human plan and the next steps, be honest and critical. Human usually lacks very deep understanding of low-level details of what we are about to build, and has a limited ability to grasp future consequences of the decisions we are about to make. Feel free to push back and provide better suggestions. If human asks to do something which does not seem to make sense, stop and explain to human why this is a bad idea before proceeding.
 
 ### Communication shortcuts used by human:
-- "Do iteration cleanup" means "Make sure our codebase is consistent. Make sure documentation is consistent and uptodate. I will spin up a new agent which will continue from here. Make sure it will have everything it needs."
+- "Do iteration cleanup" means "Make sure our codebase is consistent. Make sure documentation is consistent and uptodate. I will spin up a new agent which will continue from here. Make sure it will have everything it needs. Make sure gitignore is uptodate."
 - "Onboard" means "Explore this codebase and understand what we are building here. Digest it. Then, receive the task."
 
 ---
