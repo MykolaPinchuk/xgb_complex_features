@@ -20,7 +20,7 @@ Key quantity throughout: **Δ PRAUC = PRAUC(oracle) − PRAUC(raw_only)** on a h
 ### Pipeline capabilities (already in code)
 
 - Synthetic DGP for positive raw features with correlation, tail-heaviness, mixtures, and test-time shifts.
-- Task suite (Levels 1–7) covering log-ratios/log-products, sum normalizations, diffs, multiplicative interactions, non-monotone transforms, and gating.
+- Task suite (Levels 1–7, used as motif labels) covering log-ratios/log-products, sum-based coordinates, contrasts, coordinate interactions, non-monotone transforms, and gating.
 - Oracle feature modes:
   - `raw_only`
   - `oracle_coords_only` (adds constructed coordinates like `u`, `u1`, `u2`, gating indicator; excludes final signal)
@@ -30,17 +30,32 @@ Key quantity throughout: **Δ PRAUC = PRAUC(oracle) − PRAUC(raw_only)** on a h
   - Diagnostics: ratio/product invariance perturbations and iso-coordinate variance
   - Dominance stats for sum-based tasks (`max(x_i)/sum(x_i)`) to flag shortcut regimes
 
+### Note on level framing (proposed wording for the paper)
+
+The current code assigns each task an integer `level`. This is a convenient taxonomy label. It is not a formal ordering by function class or “compositional depth”. In particular, the tasks labeled Level 4 and Level 5 are all coordinate interaction tasks of the form $s=u_1u_2$. The key scientific distinction is not the polynomial degree. It is the invariance type and aggregation geometry that generate different shortcut opportunities under the regime panel.
+
+If designing a complexity framework from scratch, it is cleaner to separate a small set of signal-form levels from orthogonal tags:
+
+1. **Single-coordinate monotone**: $s=u$ (ratio-like or product-like coordinate).
+2. **Additive contrasts**: $s=\sum_k \pm u_k$ (still “linear in $\log x$” for lognormal inputs, but higher arity and cancellation).
+3. **Sum-aggregation coordinates**: coordinates use $\log(x_1+x_2)$ or $\log((x_1+x_2)(x_3+x_4))$, which introduces max-dominance effects.
+4. **Coordinate interactions**: $s=\sum_k u_k v_k$ (quadratic or bilinear in $\log x$). This includes ratio×ratio, product×product, and ratio×product. These are subtypes with different invariances, not strictly different complexity levels.
+5. **Non-monotone shapes**: $s=\phi(u)$ or $s=\phi(u_1u_2)$ with non-monotone $\phi$ (multi-threshold decision geometry).
+6. **Conditional or gated structure**: $s=\mathbb{1}\{g>t\}s_1+(1-\mathbb{1}\{g>t\})s_2$ (piecewise mixture of simpler forms).
+
+Suggested wording: treat “levels” as a taxonomy of motifs. Present Level 4 and Level 5 together as an “interaction family” with ratio, product, and hybrid variants. State explicitly that the level index is not a strict complexity ranking. This keeps the narrative consistent with the empirical differences across regimes, which are driven by distributional geometry and invariance violations rather than by degree alone.
+
 ### Existing experiment runs (already completed)
 
 All tables copied into this directory are from **`exp_default`** (12 tasks × 6 regimes × 3 seeds × 3 XGB configs at n=30k). Broader panels (e.g., `exp_all_levels_10k`) remain under `runs/…` but are intentionally omitted from `paper_draft/2025-12-14_110315/` to avoid mixing result sets.
 
 ## 3) Main results (high-level)
 
-### 3.1 The “hard” levels show large oracle gaps (especially Level 4 interactions)
+### 3.1 Interaction tasks show large oracle gaps
 
-In the main run (`exp_default`), Level 4 (interaction of coordinates) shows a large drop for raw-only relative to oracle:
+In the main run (`exp_default`), interaction tasks of the form $s=u_1u_2$ show a large drop for raw-only relative to oracle. In the current config labeling, the largest median gap appears at level=4 (ratio×ratio and product×product):
 
-- Level 4 has the **largest relative drop** (raw vs oracle) among levels:
+- Level 4 has the **largest relative drop** (raw vs oracle) among labeled levels:
   - Example (median across all regimes/seeds for one config): raw-only median PRAUC ≈ **0.113**, oracle median PRAUC ≈ **0.245–0.249** (relative drop ≈ **~53–55%** depending on oracle mode and config).
 
 This is consistent with the hypothesis that learning multiplicative interactions of log-coordinates is nontrivial for raw-only trees under nuisance variation, while the oracle feature makes it easy.
@@ -97,7 +112,7 @@ Useful framing (supported by the existing runs):
 
 Suggested paper narrative arc:
 
-1. Define the benchmark + tasks (Levels 1–7).
+1. Define the benchmark + task families (monotone coordinates, sum-based coordinates, contrasts, interactions, non-monotone, gated).
 2. Show that on benign regimes, raw-only may look “okay”, but under invariance-preserving shift it can collapse.
 3. Show that oracle features (especially `s`) close the gap, and diagnostics corroborate invariance.
 4. Discuss how this relates to feature engineering/representation learning and robustness.
