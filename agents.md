@@ -9,7 +9,7 @@ To change repo-specific notes, edit local_context_enrichments/local_agents.md in
 - Do not go outside this repo. Do not delete or edit any files outside this workspace!!!
 - Even if you have mistakenly or unintentionally created a file or a folder outside this repo, do not edit or delete it w/o asking permission. In such cases stop your work and ask human for a permission to delete them.
 - Use rapid iteration. Start with a simple version that works, then add features incrementally. When dealing with large tasks, proceed in small increments and validate key assumptions/results for each increment before proceeding further. Validate assumptions quickly. Then add complexity incrementally.
-- Do not run any code which is expected to take more than 5 minutes to run. Use timeouts. Use 2 minutes as default timeout for any code execution.
+- Do not run any code which is expected to take more than 5 minutes to run. Use timeouts. Use 2 minutes as default timeout for any code execution. When producing final results, we may need to run code for much longer. It this is necessary, communicate this to human and get approval first.
 - Run code to verify behavior. Do not rely on assumptions or placeholders.
 - When in doubt, err on the side of not overengineering.
 - Never replace user-provided values with placeholders.
@@ -18,10 +18,29 @@ To change repo-specific notes, edit local_context_enrichments/local_agents.md in
 - You can use all except one vCPUs/threads available at this machine.
 - Use logs/agents/ dir to store any logs related to agent runs. After completing each task/iteration, summarize the key steps taken by the agent and store them in a markdown file in the agent_logs dir. Specify which agent and model were used as well as exact timestamps.
 - When discussing with human plan and the next steps, be honest and critical. Human usually lacks very deep understanding of low-level details of what we are about to build, and has a limited ability to grasp future consequences of the decisions we are about to make. Feel free to push back and provide better suggestions. If human asks to do something which does not seem to make sense, stop and explain to human why this is a bad idea before proceeding.
+- Human develops this repo by using many generations of agents. An agent (like you) works on this repo for a while, then I terminate it, and spin up a new agent. I am wondering whether we can make a job of a new agent easier by explaining what it needs to read and understand when onboarding. Make sure that we have an onboarding doc for this. Keep in mind that it should be general enough to be useful not just for the next agents, for for all agents which come after that. My agents have reasonably large context windows. At the end of each agent the human tells the agent to prepare a hand-off and ensure consistency. At this point agent should make sure that such onboarding document is uptodate and will not confuse the next agent.
+- When onboarding on a repo, it may be useful to run very small and very fast smoke test with the main logic. This can help understand how code works.
 
 ### Communication shortcuts used by human:
 - "Do iteration cleanup" means "Make sure our codebase is consistent. Make sure documentation is consistent and uptodate. I will spin up a new agent which will continue from here. Make sure it will have everything it needs. Make sure gitignore is uptodate."
 - "Onboard" means "Explore this codebase and understand what we are building here. Digest it. Then, receive the task."
+
+---
+
+# DS Dev Profile
+
+- If you need to build ML models, prefer XGBoost to RF. RF is much slower while its performance is slightly worse than that of XGBoost. In general, prefer 1. XGBoost and 2. LightGBM over any other type of model.
+- Always do at least basic EDA and save its results.
+- When doing modeling, think about what target variable is and what features are. Think about what they actually mean. Do not just blindly apply models without understanding the data.
+- When doing modeling, always split data into at least three sets (train, validation, test). Always report results on all three sets.
+- Iterate rapidly. Start with small subsamples. When scaling up to full data, estimate how long code will take to run. Avoid any code that is expected to take more than 5 minutes to run.
+- Use multiprocessing to speed up code if needed.
+- For each dataset/modeling problem, create a eda_summary.md. It should contain:
+  - description of the dataset/problem. It should describe which problem modeling task will try to solve, what target variable means, what key features are, and what they mean.
+  - basic EDA results (distributions of key variables, missingness, correlations).
+  If the task includes building and evaluating a model, such information may be included into model_summary.md instead of eda_summary.md. What amtters is that any run should have at least one of these two files describing the data.
+- When reporting a subtask as complete, clearly specify where the main results/reports which human will likely want to see are located.
+- Do not lose forest for trees. When dealing with any scientific problem/question, always keep in mind the goal of the project.
 
 ---
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import shutil
 from pathlib import Path
 from typing import Any
@@ -34,6 +35,104 @@ def _std0(series: pd.Series) -> float:
 
 def _iqr(series: pd.Series) -> float:
     return float(series.quantile(0.75) - series.quantile(0.25))
+
+
+def _wilson_interval(k: int, n: int, *, z: float = 1.959963984540054) -> tuple[float, float]:
+    if n <= 0:
+        return float("nan"), float("nan")
+    if k < 0 or k > n:
+        raise ValueError("k must be in [0, n]")
+
+    p = k / n
+    denom = 1.0 + (z * z) / n
+    center = (p + (z * z) / (2.0 * n)) / denom
+    margin = (z * math.sqrt((p * (1.0 - p) / n) + (z * z) / (4.0 * n * n))) / denom
+    lo = max(0.0, center - margin)
+    hi = min(1.0, center + margin)
+    return lo, hi
+
+
+def _win_rate_table(
+    df: pd.DataFrame,
+    *,
+    group_cols: list[str],
+    value_col: str,
+    out_prefix: str,
+) -> pd.DataFrame:
+    if df.empty:
+        return pd.DataFrame(
+            columns=[
+                *group_cols,
+                f"{out_prefix}_frac_pos",
+                f"{out_prefix}_ci_lo",
+                f"{out_prefix}_ci_hi",
+                f"{out_prefix}_n_eff",
+            ]
+        )
+
+    def _one(g: pd.DataFrame) -> pd.Series:
+        v = pd.to_numeric(g[value_col], errors="coerce").dropna()
+        n_eff = int(v.shape[0])
+        if n_eff == 0:
+            return pd.Series(
+                {
+                    f"{out_prefix}_frac_pos": float("nan"),
+                    f"{out_prefix}_ci_lo": float("nan"),
+                    f"{out_prefix}_ci_hi": float("nan"),
+                    f"{out_prefix}_n_eff": 0,
+                }
+            )
+        k = int((v > 0).sum())
+        frac = float(k / n_eff)
+        lo, hi = _wilson_interval(k, n_eff)
+        return pd.Series(
+            {
+                f"{out_prefix}_frac_pos": frac,
+                f"{out_prefix}_ci_lo": lo,
+                f"{out_prefix}_ci_hi": hi,
+                f"{out_prefix}_n_eff": n_eff,
+            }
+        )
+
+    return df.groupby(group_cols, dropna=False).apply(_one, include_groups=False).reset_index()
+
+
+def _loo_median_range_table(
+    df: pd.DataFrame,
+    *,
+    group_cols: list[str],
+    loo_col: str,
+    value_col: str,
+    out_prefix: str,
+) -> pd.DataFrame:
+    if df.empty:
+        return pd.DataFrame(columns=[*group_cols, f"{out_prefix}_min", f"{out_prefix}_max", f"{out_prefix}_n_loo"])
+
+    def _one(g: pd.DataFrame) -> pd.Series:
+        loo_vals = pd.Series(g[loo_col]).dropna().unique().tolist()
+        medians: list[float] = []
+        for v in loo_vals:
+            vv = pd.to_numeric(g.loc[g[loo_col] != v, value_col], errors="coerce").dropna()
+            if vv.empty:
+                continue
+            medians.append(float(vv.median()))
+        if not medians:
+            return pd.Series(
+                {
+                    f"{out_prefix}_min": float("nan"),
+                    f"{out_prefix}_max": float("nan"),
+                    f"{out_prefix}_n_loo": int(len(loo_vals)),
+                }
+            )
+        return pd.Series(
+            {
+                f"{out_prefix}_min": float(min(medians)),
+                f"{out_prefix}_max": float(max(medians)),
+                f"{out_prefix}_n_loo": int(len(loo_vals)),
+            }
+        )
+
+    return df.groupby(group_cols, dropna=False).apply(_one, include_groups=False).reset_index()
 
 
 def aggregate_runs(*, input_dir: str, output_dir: str) -> None:
@@ -163,6 +262,62 @@ def aggregate_runs(*, input_dir: str, output_dir: str) -> None:
         .reset_index()
         .sort_values(["level", "regime_family", "oracle_mode", "xgb_config_id"])
     )
+
+    # Benchmark-panel stability summaries (computed from existing deltas; no new training).
+    win_prefix = "delta_prauc_pos_rate"
+    win_task = _win_rate_table(
+        deltas,
+        group_cols=["task_id", "level", "oracle_mode", "xgb_config_id"],
+        value_col="delta_prauc",
+        out_prefix=win_prefix,
+    )
+    by_task = by_task.merge(win_task, on=["task_id", "level", "oracle_mode", "xgb_config_id"], how="left")
+
+    win_regime = _win_rate_table(
+        deltas,
+        group_cols=["regime_family", "oracle_mode", "xgb_config_id"],
+        value_col="delta_prauc",
+        out_prefix=win_prefix,
+    )
+    by_regime_family = by_regime_family.merge(win_regime, on=["regime_family", "oracle_mode", "xgb_config_id"], how="left")
+
+    win_level = _win_rate_table(
+        deltas,
+        group_cols=["level", "oracle_mode", "xgb_config_id"],
+        value_col="delta_prauc",
+        out_prefix=win_prefix,
+    )
+    by_level = by_level.merge(win_level, on=["level", "oracle_mode", "xgb_config_id"], how="left")
+
+    win_level_regime = _win_rate_table(
+        deltas,
+        group_cols=["level", "regime_family", "oracle_mode", "xgb_config_id"],
+        value_col="delta_prauc",
+        out_prefix=win_prefix,
+    )
+    by_level_regime_family = by_level_regime_family.merge(
+        win_level_regime, on=["level", "regime_family", "oracle_mode", "xgb_config_id"], how="left"
+    )
+
+    # Leave-one-task-out stability range for the median delta within each summary cell.
+    loo_prefix = "delta_prauc_median_loo_task"
+    loo_level = _loo_median_range_table(
+        deltas,
+        group_cols=["level", "oracle_mode", "xgb_config_id"],
+        loo_col="task_id",
+        value_col="delta_prauc",
+        out_prefix=loo_prefix,
+    )
+    by_level = by_level.merge(loo_level, on=["level", "oracle_mode", "xgb_config_id"], how="left")
+
+    loo_regime = _loo_median_range_table(
+        deltas,
+        group_cols=["regime_family", "oracle_mode", "xgb_config_id"],
+        loo_col="task_id",
+        value_col="delta_prauc",
+        out_prefix=loo_prefix,
+    )
+    by_regime_family = by_regime_family.merge(loo_regime, on=["regime_family", "oracle_mode", "xgb_config_id"], how="left")
 
     by_task.to_parquet(Path(out_dir) / "summary_by_task.parquet", index=False)
     by_task.to_csv(Path(out_dir) / "summary_by_task.csv", index=False)

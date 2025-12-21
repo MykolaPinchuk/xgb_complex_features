@@ -1,0 +1,534 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath, amssymb}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{microtype}
+\usepackage[hidelinks]{hyperref}
+\usepackage{enumitem}
+
+\setlist[itemize]{leftmargin=*, itemsep=2pt, topsep=4pt}
+\setlist[enumerate]{leftmargin=*, itemsep=2pt, topsep=4pt}
+
+\newenvironment{infobox}
+{\begin{center}\begin{tabular}{|p{0.94\linewidth}|}\hline}
+{\\ \hline\end{tabular}\end{center}}
+
+\title{Can XGBoost Learn Ratio and Product Features From Raw Inputs\\Under Distribution Shift?}
+\author{Anonymous Author}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Many predictive tasks in tabular data use engineered features such as ratios or products.
+These features can encode invariances to rescaling and unit changes.
+This paper studies whether XGBoost learns these structures from raw positive inputs in a way that remains stable under targeted distribution shifts.
+
+This paper builds a synthetic benchmark of binary classification tasks.
+Each task is defined by a small number of latent coordinates.
+The coordinates are log-ratios or log-products of subsets of raw features.
+A task then applies a simple motif to these coordinates.
+Motifs include monotone coordinates, contrasts, interactions, non-monotone transforms, and gating.
+
+This paper trains XGBoost in two modes.
+The raw mode uses only raw inputs.
+The oracle mode augments inputs with either intermediate coordinates or the final latent signal.
+Across experiments, the raw mode often fits training data but fails under targeted shifts that preserve the intended coordinate.
+The largest gaps occur on interaction motifs.
+These failures indicate shortcut learning in raw space rather than recovery of the intended invariant structure.
+\end{abstract}
+
+\section{Introduction}
+XGBoost is widely used for tabular prediction.
+It can approximate many nonlinear functions.
+Approximation does not guarantee robust generalization.
+A model can fit training data using incidental cues.
+This matters under distribution shift.
+
+Ratios and products are common engineered features.
+They often encode invariances.
+A ratio is invariant to multiplying numerator and denominator by the same constant.
+A product is invariant to inverse scaling that keeps the product fixed.
+A robust predictor should not degrade when raw magnitudes change but the true coordinate stays the same.
+
+This paper asks a targeted question.
+Can XGBoost trained on raw features learn ratio or product structure in a way that remains stable under shifts that preserve that structure?
+
+\begin{infobox}
+\textbf{When to care.}
+This issue matters when feature magnitudes can change without changing the intended meaning.
+This includes unit changes, inflation or denomination changes, sensor calibration drift, vendor and geography mix shifts, and pipeline normalization changes.
+\end{infobox}
+
+\begin{infobox}
+\textbf{What to do in practice.}
+If a ratio or product is known and cheap, engineer it.
+If the structure is unknown, use targeted perturbation checks that preserve candidate invariances.
+If performance is sensitive to such checks, treat the model as using magnitude shortcuts.
+\end{infobox}
+
+\paragraph{Related work.}
+Tree ensembles are a standard baseline for tabular prediction.
+Random forests and gradient boosting are widely used due to strong accuracy and simple deployment \cite{Breiman2001,Friedman2001}.
+XGBoost is a common implementation and is often competitive on structured datasets \cite{ChenGuestrin2016}.
+These models partition the feature space with axis aligned splits.
+They can represent interactions, ratios, and products, but the representation can be inefficient when the signal depends on coordinated behavior across multiple raw features.
+Practitioners often address this with feature engineering such as log transforms, ratios, and products.
+
+\paragraph{Robustness under shift and invariant structure.}
+A separate literature studies generalization under distribution shift.
+One line of work uses invariance across environments as a guiding principle \cite{Peters2016,Arjovsky2019}.
+Another line emphasizes that strong training performance can coexist with unstable behavior due to spurious correlations and underspecification \cite{Geirhos2020,DAmour2020}.
+These viewpoints motivate evaluations that apply targeted interventions that preserve intended semantics while changing nuisance variation.
+This paper follows that logic in a tabular setting.
+It uses preserve shifts that keep a latent coordinate fixed while changing raw magnitudes.
+It then tests whether a model trained on raw inputs recovers the invariant coordinate or relies on scale dependent shortcuts.
+
+\section{Problem setup}
+Let $x \in \mathbb{R}^d_{>0}$ denote raw features.
+A task defines a latent signal $s=f(x)$.
+The label is a noisy function of $s$.
+This paper uses a logistic link for most tasks:
+\begin{equation}
+\mathbb{P}(y=1 \mid x) = \sigma\!\big(\beta (s - t)\big),
+\qquad
+\sigma(z) = \frac{1}{1+e^{-z}},
+\label{eq:logistic}
+\end{equation}
+where $\beta>0$ and $t$ controls prevalence.
+
+This paper compares two feature modes.
+The raw mode uses only $x$.
+The oracle mode augments $x$ with features derived from the data generating process.
+This paper considers two oracle variants.
+One variant adds intermediate coordinates.
+One variant adds the final latent signal $s$.
+
+This paper measures performance with test PRAUC.
+This paper also measures a paired gap:
+\begin{equation}
+\Delta \mathrm{PRAUC} = \mathrm{PRAUC}_{\mathrm{oracle}} - \mathrm{PRAUC}_{\mathrm{raw}}.
+\label{eq:delta}
+\end{equation}
+
+\begin{figure}[t]
+\centering
+\fbox{\begin{minipage}{0.92\linewidth}
+\small
+\textbf{Benchmark pipeline.}
+\begin{itemize}
+\item Sample raw features $x$ under a regime.
+\item Construct coordinates $u$ from $x$ using log-ratios and log-products.
+\item Construct a task signal $s$ by applying a simple motif to the coordinates.
+\item Sample labels $y$ from a noisy link, typically Eq.~\eqref{eq:logistic}.
+\item Train XGBoost on raw inputs only.
+Train oracle baselines that add either coordinates or the final signal.
+\item Evaluate under static regimes and under targeted shifts, including preserve shifts.
+\end{itemize}
+\end{minipage}}
+\caption{Schematic of the benchmark.}
+\label{fig:pipeline}
+\end{figure}
+
+\section{Synthetic benchmark}
+\subsection{Coordinates and task motifs}
+The benchmark is built in log-coordinates.
+This is a modeling choice.
+It reduces dynamic range and makes the intended invariances explicit.
+
+The implementation uses a stabilizer that is \emph{per coordinate}.
+For each coordinate, the stabilizer is set as a small fraction of a robust scale estimate, such as a median of the relevant sum or product computed on the training split.
+This avoids undefined logs and reduces numerical artifacts in extreme tail regimes.
+
+This paper uses two coordinate types.
+The first type is a log-ratio of sums:
+\begin{equation}
+u_R(A,B) = \log\!\left(\frac{\sum_{i\in A} x_i}{\sum_{j\in B} x_j + \epsilon_{R}(A,B)}\right).
+\label{eq:logratio}
+\end{equation}
+The second type is a log-product:
+\begin{equation}
+u_P(A) = \log\!\left(\prod_{i\in A} x_i + \epsilon_{P}(A)\right).
+\label{eq:logprod}
+\end{equation}
+
+A task then applies a simple motif to one or more coordinates.
+The benchmark assigns each task a level label that indexes a motif family.
+The level label is not a formal ordering by function-class complexity.
+Appendix~\ref{app:tasks} gives representative task definitions.
+
+Level families are:
+\begin{itemize}
+\item \textbf{Level 1 (single coordinate).} $s=u$ where $u$ is one log-ratio or one log-product coordinate.
+\item \textbf{Level 2 (aggregated coordinate).} $s=u$ where $u$ is a log-ratio of sums with larger index sets.
+\item \textbf{Level 3 (contrast).} $s=u_1-u_2$ for two coordinates of the same type.
+\item \textbf{Level 4 (interaction).} $s=u_1 u_2$ for two coordinates.
+This level includes ratio$\times$ratio and product$\times$product subtypes.
+\item \textbf{Level 5 (hybrid interaction).} $s=u_1 u_2$ where one coordinate is ratio-type and one is product-type.
+\item \textbf{Level 6 (non-monotone shape).} $s=g(u)$ where $g$ is non-monotone in $u$.
+\item \textbf{Level 7 (gating).} $s$ selects between two coordinates using a raw-feature gate.
+This level is provisional and is excluded from headline summaries.
+\end{itemize}
+
+\subsection{Distribution regimes and shifts}
+This paper generates features under several regimes.
+Some regimes are static and change tails or correlations.
+Other regimes impose explicit train-test shifts.
+
+This paper includes a \emph{preserve shift}.
+The preserve shift changes raw magnitudes while preserving the intended coordinate in the idealized case without stabilizers.
+For ratio tasks, the shift multiplies numerator and denominator features by a common factor.
+For product tasks, the shift applies inverse scaling that keeps the product constant.
+With the per-coordinate stabilizers in Eqs.~\eqref{eq:logratio} and \eqref{eq:logprod}, invariance is approximate in finite samples.
+The approximation is tight when the stabilizer terms are negligible relative to the corresponding sums or products.
+Appendix~\ref{app:shifts} states the preserve shift more precisely.
+
+The preserve shift is an identifiability device.
+Without it, a raw-only model can score well by exploiting magnitude cues that correlate with the label under a specific regime.
+Those cues can disappear when units or scales change.
+A model that truly uses the intended coordinate should be stable under preserve shifts.
+
+\subsection{Experimental protocol}
+This paper uses a fixed train-validation-test split within each dataset.
+The main experiment uses $n=30{,}000$ training examples and a similarly sized test set.
+This paper repeats each configuration over three random seeds.
+
+\subsection{Models}
+This paper trains XGBoost classifiers with a small set of capacity settings.
+The main settings vary maximum tree depth.
+This paper uses a validation set for early stopping.
+Appendix~\ref{app:train} lists the training configuration.
+
+\section{Results}
+All tables in this section use the baseline XGBoost configuration.
+Unless stated otherwise, the oracle baseline is \texttt{oracle\_coords\_only}.
+This baseline is the closest analogue to feature engineering.
+
+\paragraph{Benchmark panel stability.}
+Each configuration produces paired outcomes for raw and oracle features on the same dataset instance.
+This paper treats each $(\texttt{task\_id},\texttt{regime\_id},\texttt{seed},\texttt{xgb\_config\_id})$ instance as one experimental unit and summarizes the paired effect $\Delta\,\mathrm{PRAUC}$.
+Percentile ranges describe heterogeneity across benchmark instances.
+This paper also reports the fraction of instances with $\Delta\,\mathrm{PRAUC} > 0$ as a win rate.
+The Wilson interval in parentheses is a binomial style uncertainty summary for that win rate.
+It is not a statement of statistical significance.
+
+\subsection{Why preserve shift matters}
+Table~\ref{tab:regimes} summarizes results by regime family.
+Static regimes change distributional shape but do not impose an explicit train-test shift.
+Shift regimes do.
+The preserve shift family produces much larger median gaps than other regime families.
+
+\begin{table}[ht]
+\centering
+\small
+\resizebox{\linewidth}{!}{%
+\begin{tabular}{@{}lccclcc@{}}
+\toprule
+Regime family & Raw med PRAUC & Oracle med PRAUC & Median $\Delta$PRAUC & 10 to 90 pct range & Runs & Win rate ($\Delta>0$) \\
+\midrule
+tail\_corr & 0.137 & 0.167 & 0.007 & [-0.006, 0.037] & 108 & 76.9\% (68.1--83.8) \\
+mixture\_extremes & 0.278 & 0.303 & 0.016 & [0.003, 0.046] & 36 & 97.2\% (85.8--99.5) \\
+shift\_naive & 0.295 & 0.340 & 0.016 & [-0.010, 0.095] & 36 & 72.2\% (56.0--84.2) \\
+shift\_preserve & 0.126 & 0.352 & 0.146 & [0.017, 0.392] & 36 & 97.2\% (85.8--99.5) \\
+\bottomrule
+\end{tabular}}
+\caption{Results by regime family for the baseline model with \texttt{oracle\_coords\_only}. Win rate is the fraction of runs with $\Delta\,\mathrm{PRAUC}>0$ with a Wilson interval in parentheses.}
+\label{tab:regimes}
+\end{table}
+
+Under preserve shifts, the paired gap is positive in 97.2\% of instances (Table~\ref{tab:regimes}).
+For the preserve shift family, the leave-one-task-out median gap ranges from 0.128 to 0.157.
+
+\subsection{Main results by motif level}
+Table~\ref{tab:levels} reports results by motif level.
+It compares raw features to two oracle variants.
+The coordinate oracle adds intermediate coordinates.
+The signal oracle adds the final latent signal $s$.
+
+Levels 1 to 6 are included in the headline summary.
+Level 7 is provisional and is summarized in Appendix~\ref{app:tasks}.
+
+\begin{table}[ht]
+\centering
+\small
+\resizebox{\linewidth}{!}{%
+\begin{tabular}{@{}lcccccccc@{}}
+\toprule
+Level & Raw med & Oracle coords med & Median $\Delta$ & Win rate ($\Delta>0$) & Oracle signal med & Median $\Delta$ & Win rate ($\Delta>0$) & Runs \\
+\midrule
+1 & 0.205 & 0.244 & 0.006 & 72.2\% (56.0--84.2) & 0.239 & 0.008 & 69.4\% (53.1--82.0) & 36 \\
+2 & 0.132 & 0.161 & 0.011 & 77.8\% (61.9--88.3) & 0.157 & 0.014 & 88.9\% (74.7--95.6) & 36 \\
+3 & 0.211 & 0.319 & 0.028 & 83.3\% (68.1--92.1) & 0.330 & 0.047 & 94.4\% (81.9--98.5) & 36 \\
+4 & 0.116 & 0.236 & 0.035 & 88.9\% (74.7--95.6) & 0.246 & 0.052 & 97.2\% (85.8--99.5) & 36 \\
+5 & 0.376 & 0.453 & 0.050 & 94.4\% (74.2--99.0) & 0.477 & 0.062 & 100.0\% (82.4--100.0) & 18 \\
+6 & 0.054 & 0.061 & 0.006 & 88.9\% (74.7--95.6) & 0.065 & 0.008 & 88.9\% (74.7--95.6) & 36 \\
+\bottomrule
+\end{tabular}}
+\caption{Results by level for the baseline model. Oracle coords denotes \texttt{oracle\_coords\_only}. Oracle signal denotes \texttt{oracle\_s\_only}. Win rate is the fraction of runs with $\Delta\,\mathrm{PRAUC}>0$ with a Wilson interval in parentheses.}
+\label{tab:levels}
+\end{table}
+
+Win rates increase for contrast and interaction motifs.
+For Level 4 under the coordinate oracle, the leave-one-task-out median gap ranges from 0.012 to 0.106.
+
+The median gaps are small on single-coordinate motifs.
+The gaps are larger on contrast and interaction motifs.
+This pattern is consistent with the need to coordinate information across multiple raw features.
+
+\subsection{Preserve shifts expose noninvariant learning}
+A preserve shift should not hurt a predictor that uses the correct coordinate.
+However, preserve shifts can cause large failures for the raw feature model.
+
+Table~\ref{tab:vignette} lists the largest $\Delta \mathrm{PRAUC}$ cases under preserve shifts.
+These cases are dominated by interaction motifs.
+In the most extreme case in this table, the raw feature model reaches PRAUC 0.144 while the oracle reaches PRAUC 0.903.
+
+\begin{table}[ht]
+\centering
+\small
+\begin{tabular}{@{}lclcccc@{}}
+\toprule
+Task & Level & Regime & Seed & Raw PRAUC & Oracle PRAUC & $\Delta$PRAUC \\
+\midrule
+l4\_product\_x\_product & 4 & shift\_preserve\_c5 & 0 & 0.144 & 0.903 & 0.759 \\
+l4\_product\_x\_product & 4 & shift\_preserve\_c5 & 2 & 0.261 & 0.899 & 0.638 \\
+l5\_ratio\_x\_product & 5 & shift\_preserve\_c5 & 0 & 0.048 & 0.444 & 0.396 \\
+l5\_ratio\_x\_product & 5 & shift\_preserve\_c5 & 2 & 0.051 & 0.446 & 0.395 \\
+l5\_ratio\_x\_product & 5 & shift\_preserve\_c5 & 1 & 0.066 & 0.455 & 0.390 \\
+\bottomrule
+\end{tabular}
+\caption{Top five largest gaps under preserve shifts for the baseline model with \texttt{oracle\_coords\_only}.}
+\label{tab:vignette}
+\end{table}
+
+\subsection{Diagnostics align with performance gaps}
+This paper uses diagnostics that test invariance directly.
+This paper also measures iso-coordinate variation.
+
+For a ratio coordinate, this paper scales numerator and denominator features together.
+In the idealized case without stabilizers, this keeps the coordinate fixed.
+With the stabilizer $\epsilon_R(A,B)$ in Eq.~\eqref{eq:logratio}, invariance is approximate.
+A perfectly invariant predictor should not change under this perturbation.
+This paper reports a ratio invariance error based on prediction differences under such perturbations.
+This paper also reports an iso variation score that measures prediction variability along iso-coordinate directions.
+
+These diagnostics are mechanistic checks.
+Across regime families, the coordinate oracle has smaller invariance errors than the raw model.
+Appendix~\ref{app:diag} reports these medians.
+Preserve shift is the performance stress test.
+Runs with larger invariance error tend to have larger $\Delta \mathrm{PRAUC}$.
+
+\section{Discussion and future work}
+This benchmark isolates a specific risk.
+A raw-only model can fit data using magnitude cues that are cheap for trees to exploit.
+Those cues can be unstable under unit and scale changes.
+Oracle coordinates reduce this risk because they expose the invariant structure directly.
+
+This paper has limitations.
+It uses synthetic data.
+It uses a small set of model settings.
+It does not yet include a wide set of baseline learners.
+
+This paper will be updated with additional baseline runs and uncertainty estimates.
+Appendix~\ref{app:future} lists concrete requested runs for the coding and research agent.
+
+\appendix
+
+\section{Task definitions}
+\label{app:tasks}
+This appendix gives representative task definitions.
+Each task uses disjoint index sets unless stated otherwise.
+All tasks use the coordinate definitions in Eqs.~\eqref{eq:logratio} and \eqref{eq:logprod}.
+
+\subsection*{Level 1 examples}
+Ratio: $s=u_R(\{0,1\},\{2,3\})$.
+Product: $s=u_P(\{0,1\})$.
+
+\subsection*{Level 2 examples}
+Ratio of larger sums: $s=u_R(\{0,1,2,3\},\{4,5,6,7\})$.
+
+\subsection*{Level 3 examples}
+Contrast of ratios: $s=u_R(\{0,1\},\{2,3\}) - u_R(\{4,5\},\{6,7\})$.
+Contrast of products: $s=u_P(\{0,1\}) - u_P(\{2,3\})$.
+
+\subsection*{Level 4 examples}
+Ratio$\times$ratio: $s=u_R(\{0,1\},\{2,3\}) \cdot u_R(\{4,5\},\{6,7\})$.
+Product$\times$product: $s=u_P(\{0,1\}) \cdot u_P(\{2,3\})$.
+
+\subsection*{Level 5 examples}
+Hybrid interaction: $s=u_R(\{0,1\},\{2,3\}) \cdot u_P(\{4,5\})$.
+
+\subsection*{Level 6 examples}
+Band-pass shape on a coordinate:
+\begin{equation}
+s = \exp\!\left(-\frac{(u-\mu)^2}{2\sigma^2}\right),
+\qquad u = u_R(\{0,1\},\{2,3\}).
+\end{equation}
+This creates a non-monotone relationship between $u$ and the label.
+
+\subsection*{Level 7 examples (provisional)}
+The implementation uses a raw feature as the gate.
+Let $x_g$ denote a positive raw feature and let $\tau$ denote a threshold, such as the training median of $x_g$.
+Define
+\begin{equation}
+s =
+\begin{cases}
+u_a, & x_g > \tau, \\
+u_b, & x_g \le \tau,
+\end{cases}
+\qquad
+x_g = x_4,
+\quad
+u_a = u_R(\{0,1\},\{2,3\}),
+\quad
+u_b = u_P(\{5,6\}).
+\end{equation}
+This level is excluded from headline summaries until the gate definition and shifts are fully aligned.
+
+\section{Preserve shift construction}
+\label{app:shifts}
+This appendix states the preserve shift at the coordinate level.
+
+For a ratio coordinate $u_R(A,B)$, define a positive scalar $c$.
+Apply $x_i \leftarrow c x_i$ for $i\in A\cup B$.
+If $\epsilon_R(A,B)=0$, this leaves $u_R(A,B)$ unchanged.
+With $\epsilon_R(A,B)>0$ in the denominator, the transformed coordinate is
+\begin{equation}
+u_R'(A,B) = \log\!\left(\frac{c \sum_{i\in A} x_i}{c \sum_{j\in B} x_j + \epsilon_R(A,B)}\right)
+= u_R(A,B) + \log\!\left(\frac{\sum_{j\in B} x_j + \epsilon_R(A,B)}{\sum_{j\in B} x_j + \epsilon_R(A,B)/c}\right).
+\end{equation}
+Therefore, the preserve shift is approximately invariance-preserving when $c \sum_{j\in B} x_j \gg \epsilon_R(A,B)$.
+
+For a product coordinate $u_P(A)$, preserve shifts use inverse scaling.
+For example, for $A=\{i,j\}$ apply $x_i \leftarrow c x_i$ and $x_j \leftarrow x_j / c$.
+This keeps $\prod_{k\in A} x_k$ fixed.
+With $\epsilon_P(A)>0$, the coordinate is approximately preserved when the product dominates $\epsilon_P(A)$.
+
+\section{Level by regime-family breakdown}
+\label{app:heat}
+Table~\ref{tab:heatmap} reports median $\Delta$PRAUC by level and regime family for the baseline model with \texttt{oracle\_coords\_only}.
+This table shows that the preserve shift family is the dominant source of large gaps.
+
+\begin{table}[ht]
+\centering
+\small
+\begin{tabular}{@{}lcccc@{}}
+\toprule
+Level & tail\_corr & mixture\_extremes & shift\_naive & shift\_preserve \\
+\midrule
+1 & 0.002 & 0.011 & -0.003 & 0.190 \\
+2 & 0.005 & 0.018 & 0.005 & 0.096 \\
+3 & 0.018 & 0.034 & 0.019 & 0.178 \\
+4 & 0.013 & 0.057 & 0.087 & 0.190 \\
+5 & 0.028 & 0.041 & 0.060 & 0.395 \\
+6 & 0.006 & 0.004 & 0.016 & 0.017 \\
+\bottomrule
+\end{tabular}
+\caption{Median $\Delta$PRAUC by level and regime family for \texttt{oracle\_coords\_only}.}
+\label{tab:heatmap}
+\end{table}
+
+\section{Invariance diagnostics by regime family}
+\label{app:diag}
+This appendix reports invariance diagnostics aggregated by regime family for the baseline model with \texttt{oracle\_coords\_only}.
+The ratio invariance error is the mean absolute prediction change under joint scaling of ratio components.
+The product invariance error is the mean absolute prediction change under compensating product scalings.
+
+\begin{table}[ht]
+\centering
+\small
+\begin{tabular}{@{}lcccc@{}}
+\toprule
+Regime family & Ratio inv err (raw) & Ratio inv err (oracle) & Product inv err (raw) & Product inv err (oracle) \\
+\midrule
+tail\_corr & 0.0105 & 0.0023 & 0.0113 & 0.0036 \\
+mixture\_extremes & 0.0070 & 0.0018 & 0.0118 & 0.0037 \\
+shift\_naive & 0.0109 & 0.0037 & 0.0167 & 0.0056 \\
+shift\_preserve & 0.0113 & 0.0020 & 0.0175 & 0.0035 \\
+\bottomrule
+\end{tabular}
+\caption{Median invariance errors by regime family for the baseline model with \texttt{oracle\_coords\_only}. Smaller values indicate better invariance.}
+\label{tab:diag_regimes}
+\end{table}
+
+\section{Training configuration}
+\label{app:train}
+This paper uses standard XGBoost binary classification training.
+This paper uses early stopping on a validation split.
+This paper varies maximum depth in the main grid.
+Other settings follow common defaults.
+The experiment harness records full configurations alongside each run.
+
+\section{Requested runs for the next iteration}
+\label{app:future}
+This checklist is written for the coding and research agent.
+
+\begin{itemize}
+\item Add a baseline that trains the raw-only model on $\log(x+\epsilon)$ features.
+Report Table~\ref{tab:regimes} and Table~\ref{tab:levels} for this baseline on the preserve shift family.
+This isolates whether failures are driven by dynamic range in raw $x$.
+\item Report ROC-AUC alongside PRAUC for all main tables.
+Keep PRAUC as the primary metric.
+Use ROC-AUC as a stability check.
+\item Add a seed expansion on a smaller subset.
+Use at least 10 seeds for a reduced grid that focuses on Levels 3 to 5 and the preserve shift family.
+Report uncertainty bands for $\Delta \mathrm{PRAUC}$.
+\item Add an explicit sweep that varies correlation while holding tail-heaviness fixed.
+Add a separate sweep that varies tail-heaviness while holding correlation fixed.
+This removes confounding across regimes.
+\item Add a dataset size sweep.
+Use at least three training sizes.
+Keep the same test set.
+This estimates sample complexity for learning invariant coordinates.
+\item Add baseline learners on oracle coordinates.
+Include a linear model on the coordinate features.
+Include a small neural net baseline.
+Keep capacity roughly comparable across models.
+\item Revisit Level 7 gating.
+Ensure that the gate definition and the preserve shift are aligned for that level.
+Delay strong claims about gating until this check is complete.
+\end{itemize}
+
+\begin{thebibliography}{99}
+
+\bibitem{Breiman2001}
+L. Breiman.
+Random forests.
+\emph{Machine Learning}, 45:5--32, 2001.
+
+\bibitem{Friedman2001}
+J. H. Friedman.
+Greedy function approximation: A gradient boosting machine.
+\emph{The Annals of Statistics}, 29(5):1189--1232, 2001.
+
+\bibitem{ChenGuestrin2016}
+T. Chen and C. Guestrin.
+XGBoost: A scalable tree boosting system.
+In \emph{Proceedings of the 22nd ACM SIGKDD International Conference on Knowledge Discovery and Data Mining}, 2016.
+
+\bibitem{Peters2016}
+J. Peters, P. B{\"u}hlmann, and N. Meinshausen.
+Causal inference using invariant prediction: Identification and confidence intervals.
+\emph{Journal of the Royal Statistical Society: Series B}, 78(5):947--1012, 2016.
+
+\bibitem{Arjovsky2019}
+M. Arjovsky, L. Bottou, I. Gulrajani, and D. Lopez-Paz.
+Invariant risk minimization.
+In \emph{International Conference on Learning Representations}, 2019.
+
+\bibitem{Geirhos2020}
+R. Geirhos, J.-H. Jacobsen, C. Michaelis, R. Zemel, W. Brendel, M. Bethge, and F. A. Wichmann.
+Shortcut learning in deep neural networks.
+\emph{Nature Machine Intelligence}, 2:665--673, 2020.
+
+\bibitem{DAmour2020}
+A. D'Amour, K. Heller, D. Moldovan, B. Adlam, B. Alipanahi, A. Beutel, and others.
+Underspecification presents challenges for credibility in modern machine learning.
+In \emph{Advances in Neural Information Processing Systems}, 2020.
+
+\end{thebibliography}
+
+\end{document}
